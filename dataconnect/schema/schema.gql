@@ -1,0 +1,42 @@
+type User @table {
+  displayName: String!
+  email: String!
+  createdAt: Timestamp!
+  photoUrl: String
+}
+
+type Resource @table {
+  title: String!
+  author: String!
+  resourceType: String!
+  createdAt: Timestamp!
+  content: String!
+  description: String
+  publicationYear: Int
+  topics: [String]
+}
+
+type ReadingList @table {
+  user: User!
+  name: String!
+  createdAt: Timestamp!
+  updatedAt: Timestamp!
+  description: String
+}
+
+type ReadingListItem @table(key: ["readingList", "resource"]) {
+  readingList: ReadingList!
+  resource: Resource!
+  addedAt: Timestamp!
+  status: String
+}
+
+type Annotation @table {
+  user: User!
+  resource: Resource!
+  annotationType: String!
+  content: String!
+  createdAt: Timestamp!
+  locationInResource: String
+  highlightedText: String
+}

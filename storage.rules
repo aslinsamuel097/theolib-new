@@ -1,0 +1,15 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Allows full read/write access to the books directory
+    match /books/{allPaths=**} {
+      allow read, write: if true;
+    }
+    
+    // Default fallback - allow all for development ease
+    match /{allPaths=**} {
+      allow read, write: if true;
+    }
+  }
+}

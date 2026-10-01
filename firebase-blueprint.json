@@ -1,0 +1,198 @@
+
+{
+  "entities": {
+    "User": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "User",
+      "type": "object",
+      "description": "Represents a user of the TheoLib application.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier (Username)."
+        },
+        "email": {
+          "type": "string",
+          "format": "email"
+        },
+        "firstName": {
+          "type": "string"
+        },
+        "lastName": {
+          "type": "string"
+        },
+        "password": {
+          "type": "string"
+        },
+        "collegeId": {
+          "type": "string"
+        },
+        "role": {
+          "type": "string",
+          "enum": ["student", "faculty", "admin", "super", "demo"]
+        },
+        "isSuspended": {
+          "type": "boolean",
+          "description": "Whether the user account is currently suspended."
+        },
+        "friends": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "List of user IDs who are friends."
+        },
+        "isStarred": {
+          "type": "boolean"
+        },
+        "canDownloadPdf": {
+          "type": "boolean",
+          "description": "Whether the scholar is authorized to download PDF manuscripts."
+        }
+      },
+      "required": [
+        "id",
+        "firstName",
+        "lastName",
+        "password",
+        "collegeId"
+      ]
+    },
+    "College": {
+      "title": "College",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "password": { "type": "string" },
+        "isSuspended": { "type": "boolean" }
+      }
+    },
+    "Book": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "Book",
+      "type": "object",
+      "description": "Represents a theological manuscript.",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "author": {
+          "type": "string"
+        },
+        "category": {
+          "type": "string"
+        },
+        "pdfUrl": {
+          "type": "string",
+          "description": "URL to the single manuscript PDF."
+        },
+        "thumbnailUrl": {
+          "type": "string"
+        },
+        "language": {
+          "type": "string"
+        },
+        "recommendedBy": {
+          "type": "string"
+        },
+        "isTrending": {
+          "type": "boolean"
+        },
+        "isRecent": {
+          "type": "boolean"
+        },
+        "isIndividualAccess": {
+          "type": "boolean",
+          "description": "Whether this volume is accessible to individual scholars."
+        },
+        "allowedCollegeIds": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "required": [
+        "title",
+        "author",
+        "category",
+        "pdfUrl"
+      ]
+    },
+    "Loan": {
+      "title": "Loan",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "bookId": { "type": "string" },
+        "issuedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "Activity": {
+      "title": "Activity",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "collegeId": { "type": "string" },
+        "type": { "type": "string" },
+        "bookId": { "type": "string" },
+        "bookTitle": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      }
+    },
+    "Message": {
+      "title": "Message",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "collegeId": { "type": "string" },
+        "type": { "type": "string" },
+        "content": { "type": "string" },
+        "bookId": { "type": "string" },
+        "bookTitle": { "type": "string" },
+        "loanId": { "type": "string" },
+        "adminResponse": { "type": "string" },
+        "hasResponse": { "type": "boolean" },
+        "isReadByScholar": { "type": "boolean" },
+        "isReadByAdmin": { "type": "boolean" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "fromId": { "type": "string" },
+        "toId": { "type": "string" },
+        "privacy": { "type": "string", "enum": ["public", "friends", "private"] }
+      }
+    }
+  },
+  "auth": {
+    "providers": [
+      "password"
+    ]
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/backend/entities/User" },
+      "description": "User profiles"
+    },
+    "/colleges/{collegeId}": {
+      "schema": { "$ref": "#/backend/entities/College" },
+      "description": "Institutions"
+    },
+    "/books/{bookId}": {
+      "schema": { "$ref": "#/backend/entities/Book" },
+      "description": "Manuscripts"
+    },
+    "/loans/{loanId}": {
+      "schema": { "$ref": "#/backend/entities/Loan" },
+      "description": "Borrowing records"
+    },
+    "/activities/{activityId}": {
+      "schema": { "$ref": "#/backend/entities/Activity" },
+      "description": "Audit logs"
+    },
+    "/messages/{messageId}": {
+      "schema": { "$ref": "#/backend/entities/Message" },
+      "description": "Unified protocols including logs, notes, and inquiries"
+    }
+  }
+}

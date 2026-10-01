@@ -1,0 +1,35 @@
+
+{
+  "placeholderImages": [
+    {
+      "id": "book-1",
+      "description": "Old theological manuscript cover",
+      "imageUrl": "https://picsum.photos/seed/bible1/400/600",
+      "imageHint": "theology book"
+    },
+    {
+      "id": "book-2",
+      "description": "Classical literature book cover",
+      "imageUrl": "https://picsum.photos/seed/bible2/400/600",
+      "imageHint": "ancient scrolls"
+    },
+    {
+      "id": "book-3",
+      "description": "Modern philosophical book",
+      "imageUrl": "https://picsum.photos/seed/bible3/400/600",
+      "imageHint": "church history"
+    },
+    {
+      "id": "book-4",
+      "description": "Gothic library interior",
+      "imageUrl": "https://picsum.photos/seed/lib1/1200/800",
+      "imageHint": "library interior"
+    },
+    {
+      "id": "hero-bg",
+      "description": "Ancient theological library atmosphere",
+      "imageUrl": "https://picsum.photos/seed/theohero/1920/1080",
+      "imageHint": "theological library"
+    }
+  ]
+}
