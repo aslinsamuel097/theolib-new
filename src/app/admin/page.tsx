@@ -13,7 +13,7 @@ if (typeof Promise !== 'undefined' && typeof (Promise as any).withResolvers === 
 }
 
 import "@/lib/pdf-polyfill";
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { 
   Library, 
@@ -67,7 +67,9 @@ import {
   ShieldAlert,
   Wallet,
   AlertTriangle,
-  FileDown
+  FileDown,
+  CloudLightning,
+  ArrowRightLeft
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter } from "@/components/ui/card";
@@ -254,25 +256,43 @@ export default function AdminPanel() {
   const [isUsageDialogOpen, setIsUsageDialogOpen] = useState(false);
   const [usageScholar, setUsageScholar] = useState<any>(null);
 
+  const [isMigratingToDrive, setIsMigratingToDrive] = useState(false);
+  const [isMigrationDialogOpen, setIsMigrationDialogOpen] = useState(false);
+  const [migrationProgress, setMigrationProgress] = useState({
+    current: 0,
+    total: 0,
+    currentTitle: '',
+    percent: 0,
+    succeeded: 0,
+    failed: 0,
+  });
+  const [migrationLogs, setMigrationLogs] = useState<Array<{
+    id: string;
+    title: string;
+    status: 'pending' | 'processing' | 'success' | 'failed';
+    error?: string;
+  }>>([]);
+  const cancelMigrationRef = useRef(false);
+
   const isSuperAdmin = localUser?.role === 'super';
   const isCollegeAdmin = localUser?.role === 'admin';
   const userCollegeId = localUser?.id;
 
-  const collegesQuery = useMemoFirebase(() => firebaseUser ? query(collection(db, "colleges"), orderBy("name", "asc")) : null, [db, firebaseUser]);
+  const collegesQuery = useMemoFirebase(() => (db && (localUser || firebaseUser)) ? query(collection(db, "colleges"), orderBy("name", "asc")) : null, [db, localUser, firebaseUser]);
   const studentsQuery = useMemoFirebase(() => {
-    if (!firebaseUser) return null;
+    if (!db || (!localUser && !firebaseUser)) return null;
     let q = query(collection(db, "users"), where("role", "in", ["student", "faculty", "admin", "super", "demo"]));
     if (isCollegeAdmin) q = query(collection(db, "users"), where("collegeId", "==", userCollegeId));
     return q;
-  }, [db, firebaseUser, isCollegeAdmin, userCollegeId]);
+  }, [db, localUser, firebaseUser, isCollegeAdmin, userCollegeId]);
 
-  const booksQuery = useMemoFirebase(() => firebaseUser ? query(collection(db, "books"), orderBy("createdAt", "desc")) : null, [db, firebaseUser]);
+  const booksQuery = useMemoFirebase(() => (db && (localUser || firebaseUser)) ? query(collection(db, "books"), orderBy("createdAt", "desc")) : null, [db, localUser, firebaseUser]);
   const messagesQuery = useMemoFirebase(() => {
-    if (!firebaseUser) return null;
+    if (!db || (!localUser && !firebaseUser)) return null;
     let q = query(collection(db, "messages"), orderBy("timestamp", "desc"), limit(2000));
     if (isCollegeAdmin) q = query(collection(db, "messages"), where("collegeId", "==", userCollegeId), orderBy("timestamp", "desc"), limit(2000));
     return q;
-  }, [db, firebaseUser, isCollegeAdmin, userCollegeId]);
+  }, [db, localUser, firebaseUser, isCollegeAdmin, userCollegeId]);
 
   const { data: collegesData } = useCollection(collegesQuery);
   const { data: studentsData } = useCollection(studentsQuery);
@@ -289,6 +309,13 @@ export default function AdminPanel() {
     }
     return list;
   }, [booksData, isCollegeAdmin, userCollegeId]);
+
+  const nonDriveBooks = useMemo(() => {
+    return allBooks.filter(book => {
+      const url = book.pdfUrl || book.fullBookUrl || '';
+      return url && !url.includes('drive.google.com') && !url.includes('/api/drive/file/');
+    });
+  }, [allBooks]);
 
   const allMessages = messagesData || [];
 
@@ -1007,6 +1034,157 @@ export default function AdminPanel() {
     }
   };
 
+  const handleStartMigration = async () => {
+    if (!isSuperAdmin) {
+      toast({ variant: "destructive", title: "Access Restricted", description: "Only the Super Admin can transfer manuscripts." });
+      return;
+    }
+
+    if (nonDriveBooks.length === 0) {
+      toast({ title: "Catalog Synchronized", description: "All volume manuscripts are already archived in Google Drive!" });
+      return;
+    }
+
+    let token = getCachedDriveToken();
+    if (!token && auth) {
+      try {
+        token = await requestGoogleDriveToken(auth);
+        setHasDriveToken(true);
+      } catch (e: any) {
+        toast({ variant: "destructive", title: "Drive Connection Required", description: "Please authorize Google Drive (intheolib@gmail.com) to transfer files." });
+        return;
+      }
+    }
+
+    setIsMigrationDialogOpen(true);
+    setIsMigratingToDrive(true);
+    cancelMigrationRef.current = false;
+
+    const initialLogs = nonDriveBooks.map(b => ({
+      id: b.id,
+      title: b.title,
+      status: 'pending' as const,
+    }));
+    setMigrationLogs(initialLogs);
+
+    let succeeded = 0;
+    let failed = 0;
+
+    for (let i = 0; i < nonDriveBooks.length; i++) {
+      if (cancelMigrationRef.current) {
+        toast({ title: "Transfer Paused", description: "Manuscript migration was paused." });
+        break;
+      }
+
+      const book = nonDriveBooks[i];
+      const percent = Math.round(((i) / nonDriveBooks.length) * 100);
+
+      setMigrationProgress({
+        current: i + 1,
+        total: nonDriveBooks.length,
+        currentTitle: book.title,
+        percent,
+        succeeded,
+        failed,
+      });
+
+      setMigrationLogs(prev => prev.map(item => item.id === book.id ? { ...item, status: 'processing' } : item));
+
+      try {
+        const res = await fetch('/api/drive/migrate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            bookId: book.id,
+            pdfUrl: book.pdfUrl || book.fullBookUrl,
+            title: book.title,
+            category: book.category || 'Theology',
+            language: book.language || 'English',
+            accessToken: token,
+          }),
+        });
+
+        const data = await res.json();
+        if (!res.ok || !data.success) {
+          throw new Error(data.error || 'Transfer failed');
+        }
+
+        updateDocumentNonBlocking(doc(db, "books", book.id), {
+          pdfUrl: data.url,
+          driveFileId: data.fileId,
+          transferredToDriveAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+
+        succeeded++;
+        setMigrationLogs(prev => prev.map(item => item.id === book.id ? { ...item, status: 'success' } : item));
+
+      } catch (itemError: any) {
+        console.error(`Failed to migrate ${book.title}:`, itemError);
+        failed++;
+        setMigrationLogs(prev => prev.map(item => item.id === book.id ? { ...item, status: 'failed', error: itemError.message } : item));
+      }
+    }
+
+    setMigrationProgress(prev => ({
+      ...prev,
+      percent: 100,
+      succeeded,
+      failed,
+    }));
+    setIsMigratingToDrive(false);
+    toast({
+      title: "Drive Migration Complete",
+      description: `Successfully transferred ${succeeded} manuscript(s) to your Google Drive folder.`,
+    });
+  };
+
+  const handleMigrateSingleBook = async (book: any) => {
+    if (!isSuperAdmin) return;
+    let token = getCachedDriveToken();
+    if (!token && auth) {
+      try {
+        token = await requestGoogleDriveToken(auth);
+        setHasDriveToken(true);
+      } catch (e: any) {
+        toast({ variant: "destructive", title: "Drive Connection Required", description: "Please authorize Google Drive." });
+        return;
+      }
+    }
+
+    toast({ title: "Transferring Volume", description: `Transferring "${book.title}" to Google Drive...` });
+    try {
+      const res = await fetch('/api/drive/migrate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          bookId: book.id,
+          pdfUrl: book.pdfUrl || book.fullBookUrl,
+          title: book.title,
+          category: book.category || 'Theology',
+          language: book.language || 'English',
+          accessToken: token,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Transfer failed');
+      }
+
+      updateDocumentNonBlocking(doc(db, "books", book.id), {
+        pdfUrl: data.url,
+        driveFileId: data.fileId,
+        transferredToDriveAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+
+      toast({ title: "Transferred to Drive", description: `"${book.title}" is now archived in your Google Drive folder.` });
+    } catch (err: any) {
+      toast({ variant: "destructive", title: "Transfer Failed", description: err.message });
+    }
+  };
+
   const handleSendResponse = () => {
     if (!respondingToMessage || !adminResponseText.trim()) return;
     updateDocumentNonBlocking(doc(db, "messages", respondingToMessage.id), { 
@@ -1300,6 +1478,21 @@ export default function AdminPanel() {
                       </Badge>
                     )}
                   </div>
+                  <Button
+                    onClick={handleStartMigration}
+                    disabled={isMigratingToDrive}
+                    variant="outline"
+                    className="h-12 px-5 gap-2 rounded-2xl font-bold shadow-lg border-amber-500/30 bg-amber-500/10 hover:bg-amber-500/20 text-amber-500"
+                    title="Transfer all PDFs stored in Firebase Storage to Google Drive"
+                  >
+                    <CloudLightning className="h-4 w-4" />
+                    Transfer to Drive
+                    {nonDriveBooks.length > 0 && (
+                      <Badge className="ml-1 bg-amber-500 text-black font-black text-[10px] px-1.5 py-0.5 rounded-full">
+                        {nonDriveBooks.length}
+                      </Badge>
+                    )}
+                  </Button>
                   <Button onClick={() => setIsAddBookOpen(true)} className="h-12 px-6 gap-2 rounded-2xl font-bold shadow-2xl shadow-primary/20"><Plus className="h-4 w-4" /> New Volume</Button>
                   <Button onClick={() => setIsBulkUploadOpen(true)} variant="outline" className="h-12 px-6 gap-2 rounded-2xl font-bold shadow-lg"><UploadCloud className="h-4 w-4" /> Bulk Import</Button>
                 </>
@@ -1319,46 +1512,75 @@ export default function AdminPanel() {
                   <TableHead className="py-6 pl-10">Manuscript</TableHead>
                   <TableHead>Category</TableHead>
                   <TableHead>Language</TableHead>
+                  <TableHead>Storage</TableHead>
                   <TableHead>Access</TableHead>
                   <TableHead className="text-right pr-10">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {sortedBooks.map(book => (
-                  <TableRow key={book.id} className="border-white/5 hover:bg-white/5">
-                    <TableCell className="py-6 pl-10">
-                      <div className="flex items-center gap-4">
-                        <div className="h-12 w-8 bg-muted rounded overflow-hidden relative shadow-sm border border-white/5">
-                          {book.thumbnailUrl ? (
-                            <img src={book.thumbnailUrl} className="object-cover w-full h-full" alt="" />
+                {sortedBooks.map(book => {
+                  const isBookInDrive = Boolean(book.pdfUrl && (book.pdfUrl.includes('drive.google.com') || book.pdfUrl.includes('/api/drive/file/')));
+                  return (
+                    <TableRow key={book.id} className="border-white/5 hover:bg-white/5">
+                      <TableCell className="py-6 pl-10">
+                        <div className="flex items-center gap-4">
+                          <div className="h-12 w-8 bg-muted rounded overflow-hidden relative shadow-sm border border-white/5">
+                            {book.thumbnailUrl ? (
+                              <img src={book.thumbnailUrl} className="object-cover w-full h-full" alt="" />
+                            ) : (
+                              <ImageIcon className="h-4 w-4 absolute inset-0 m-auto opacity-20" />
+                            )}
+                          </div>
+                          <div className="flex flex-col"><span className="font-bold">{book.title}</span><span className="text-[10px] opacity-40">by {book.author}</span></div>
+                        </div>
+                      </TableCell>
+                      <TableCell><Badge variant="outline">{book.category}</Badge></TableCell>
+                      <TableCell><span className="text-xs">{book.language || "English"}</span></TableCell>
+                      <TableCell>
+                        {isBookInDrive ? (
+                          <Badge variant="outline" className="border-green-500/40 text-green-500 bg-green-500/10 text-[10px] py-0.5 font-semibold">
+                            <CheckCircle2 className="h-3 w-3 mr-1" /> Drive
+                          </Badge>
+                        ) : (
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <Badge variant="outline" className="border-amber-500/40 text-amber-500 bg-amber-500/10 text-[10px] py-0.5 font-semibold">
+                              Firebase
+                            </Badge>
+                            {isSuperAdmin && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-6 px-2 text-[10px] font-bold border-amber-500/30 text-amber-400 hover:bg-amber-500/10 rounded-lg"
+                                onClick={() => handleMigrateSingleBook(book)}
+                                disabled={isMigratingToDrive}
+                                title="Transfer this manuscript to Google Drive"
+                              >
+                                <CloudLightning className="h-3 w-3 mr-1" /> To Drive
+                              </Button>
+                            )}
+                          </div>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex flex-wrap gap-2">
+                          {book.isIndividualAccess && <Badge variant="outline" className="border-indigo-500/30 text-indigo-400 bg-indigo-500/5">Individual</Badge>}
+                          {(!book.allowedCollegeIds || book.allowedCollegeIds.length === 0) ? (
+                            <Badge variant="secondary" className="bg-green-500/10 text-green-500 border-green-500/20">Global Access</Badge>
                           ) : (
-                            <ImageIcon className="h-4 w-4 absolute inset-0 m-auto opacity-20" />
+                            <Badge variant="outline" className="border-primary/20 text-primary">{book.allowedCollegeIds.length} Colleges</Badge>
                           )}
                         </div>
-                        <div className="flex flex-col"><span className="font-bold">{book.title}</span><span className="text-[10px] opacity-40">by {book.author}</span></div>
-                      </div>
-                    </TableCell>
-                    <TableCell><Badge variant="outline">{book.category}</Badge></TableCell>
-                    <TableCell><span className="text-xs">{book.language || "English"}</span></TableCell>
-                    <TableCell>
-                      <div className="flex flex-wrap gap-2">
-                        {book.isIndividualAccess && <Badge variant="outline" className="border-indigo-500/30 text-indigo-400 bg-indigo-500/5">Individual</Badge>}
-                        {(!book.allowedCollegeIds || book.allowedCollegeIds.length === 0) ? (
-                          <Badge variant="secondary" className="bg-green-500/10 text-green-500 border-green-500/20">Global Access</Badge>
-                        ) : (
-                          <Badge variant="outline" className="border-primary/20 text-primary">{book.allowedCollegeIds.length} Colleges</Badge>
-                        )}
-                      </div>
-                    </TableCell>
-                    <TableCell className="text-right pr-10">
-                      <div className="flex justify-end gap-2">
-                        <Button variant="ghost" size="icon" onClick={() => handleSingleThumbnailSync(book)} title="Refresh Thumbnail"><RefreshCw className={cn("h-4 w-4", isSyncingThumbnails && "animate-spin")} /></Button>
-                        <Button variant="ghost" size="icon" onClick={() => { setEditingBook(book); setIsEditBookOpen(true); }}><Edit3 className="h-4 w-4" /></Button>
-                        <Button variant="ghost" size="icon" onClick={() => deleteDocumentNonBlocking(doc(db, "books", book.id))} className="text-destructive"><Trash2 className="h-4 w-4" /></Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))}
+                      </TableCell>
+                      <TableCell className="text-right pr-10">
+                        <div className="flex justify-end gap-2">
+                          <Button variant="ghost" size="icon" onClick={() => handleSingleThumbnailSync(book)} title="Refresh Thumbnail"><RefreshCw className={cn("h-4 w-4", isSyncingThumbnails && "animate-spin")} /></Button>
+                          <Button variant="ghost" size="icon" onClick={() => { setEditingBook(book); setIsEditBookOpen(true); }}><Edit3 className="h-4 w-4" /></Button>
+                          <Button variant="ghost" size="icon" onClick={() => deleteDocumentNonBlocking(doc(db, "books", book.id))} className="text-destructive"><Trash2 className="h-4 w-4" /></Button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
               </TableBody>
             </Table>
           </Card>
@@ -1896,6 +2118,81 @@ export default function AdminPanel() {
             {isUploading && <div className="space-y-2"><Progress value={uploadProgress} /><p className="text-[10px] text-center font-bold">Transmitting Volumes: {Math.round(uploadProgress)}%</p></div>}
           </div>
           <DialogFooter><Button onClick={handleBulkUpload} disabled={isUploading || bulkFiles.length === 0} className="w-full">{isUploading ? "Transmitting..." : `Import ${bulkFiles.length} Volumes`}</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isMigrationDialogOpen} onOpenChange={(open) => {
+        if (!open && isMigratingToDrive) {
+          cancelMigrationRef.current = true;
+        }
+        setIsMigrationDialogOpen(open);
+      }}>
+        <DialogContent className="rounded-[2.5rem] bg-card/95 backdrop-blur-xl border-amber-500/20 shadow-4xl p-8 max-w-xl">
+          <DialogHeader className="space-y-3">
+            <div className="p-3 bg-amber-500/10 rounded-2xl w-fit border border-amber-500/20 mx-auto">
+              <CloudLightning className="h-8 w-8 text-amber-500" />
+            </div>
+            <DialogTitle className="text-2xl font-headline font-bold text-center">
+              Google Drive Transfer Protocol
+            </DialogTitle>
+            <DialogDescription className="text-xs text-center text-muted-foreground">
+              Transferring manuscripts from Firebase Storage directly to your designated Google Drive folder (Subject &gt; Language hierarchy).
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <div className="flex justify-between text-xs font-bold">
+                <span className="text-muted-foreground truncate max-w-[280px]">
+                  {isMigratingToDrive ? `Processing: ${migrationProgress.currentTitle || 'Preparing...'}` : (migrationProgress.percent === 100 ? 'Migration Complete' : 'Ready to Transfer')}
+                </span>
+                <span className="font-mono text-primary font-bold">
+                  {migrationProgress.current} / {migrationProgress.total} ({migrationProgress.percent}%)
+                </span>
+              </div>
+              <Progress value={migrationProgress.percent} className="h-3 rounded-full" />
+              <div className="flex justify-between text-[11px] text-muted-foreground font-semibold">
+                <span className="text-green-500 font-bold">{migrationProgress.succeeded} Transferred</span>
+                {migrationProgress.failed > 0 && <span className="text-destructive font-bold">{migrationProgress.failed} Failed</span>}
+              </div>
+            </div>
+
+            <div className="space-y-1">
+              <Label className="text-[10px] uppercase font-bold tracking-wider text-muted-foreground">Transfer Ledger</Label>
+              <ScrollArea className="h-56 border border-white/10 rounded-2xl p-3 bg-muted/20">
+                <div className="space-y-2">
+                  {migrationLogs.map(item => (
+                    <div key={item.id} className="flex items-center justify-between text-xs py-1.5 px-2 rounded-xl bg-background/40 border border-white/5">
+                      <span className="truncate max-w-[300px] font-medium">{item.title}</span>
+                      {item.status === 'pending' && <Badge variant="outline" className="text-[10px] opacity-60">Pending</Badge>}
+                      {item.status === 'processing' && <Badge variant="outline" className="text-[10px] border-amber-500/40 text-amber-400 bg-amber-500/10 animate-pulse"><Loader2 className="h-3 w-3 animate-spin mr-1" /> Transferring</Badge>}
+                      {item.status === 'success' && <Badge variant="outline" className="text-[10px] border-green-500/40 text-green-400 bg-green-500/10"><CheckCircle2 className="h-3 w-3 mr-1" /> In Drive</Badge>}
+                      {item.status === 'failed' && <Badge variant="destructive" className="text-[10px]" title={item.error}>Failed</Badge>}
+                    </div>
+                  ))}
+                </div>
+              </ScrollArea>
+            </div>
+          </div>
+
+          <DialogFooter className="flex gap-2">
+            {isMigratingToDrive ? (
+              <Button
+                variant="destructive"
+                onClick={() => { cancelMigrationRef.current = true; }}
+                className="w-full h-12 rounded-2xl font-bold"
+              >
+                Pause Transfer
+              </Button>
+            ) : (
+              <Button
+                onClick={() => setIsMigrationDialogOpen(false)}
+                className="w-full h-12 rounded-2xl font-bold bg-primary hover:bg-primary/90"
+              >
+                Done
+              </Button>
+            )}
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

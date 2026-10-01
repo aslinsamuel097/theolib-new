@@ -84,6 +84,10 @@ export async function requestGoogleDriveToken(auth: Auth, forcePrompt = false): 
     return accessToken;
   } catch (error: any) {
     console.error("Google Drive Auth Error:", error);
+    if (error?.code === 'auth/unauthorized-domain') {
+      const hostname = typeof window !== 'undefined' ? window.location.hostname : 'theolib-new.vercel.app';
+      throw new Error(`Domain not authorized: Please add '${hostname}' to Firebase Console > Authentication > Settings > Authorized Domains.`);
+    }
     throw error;
   }
 }
